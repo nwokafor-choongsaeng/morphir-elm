@@ -87,14 +87,14 @@ type Ops
 
 With this, we can make the following assumptions about functions:
 ```Elm
-// Assume that transform is a transformation
+-- Assume that transform is a transformation
 transform: List { age: Int, name: String } -> List { age: Int }
 transform table = 
 	Debug.todo "Implementation details ignored"
 
-// Assume that selector is a column expression
+-- Assume that selector is a column expression
 selector: {age: Int, name: String} -> { age: Int }
-selector: row =
+selector row =
 	Debug.todo "Implementation details ignored"
 ```
 
