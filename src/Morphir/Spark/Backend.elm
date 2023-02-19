@@ -51,13 +51,14 @@ import Morphir.Spark.AST as SparkAST exposing (..)
 
 
 type alias Options =
-    {}
+    { entryPoints : List FQName }
 
 
 type Error
     = FunctionNotFound FQName
     | UnknownArgumentType (Type ())
     | MappingError SparkAST.Error
+    | EntryPointNotFound FQName
 
 
 {-| Entry point for the Spark backend. It takes the Morphir IR as the input and returns an in-memory
@@ -128,6 +129,81 @@ mapDistribution _ distro =
                 |> Dict.fromList
 
 
+{-| Entry point for the Spark backend. It takes the Morphir IR as the input and returns an in-memory
+representation of files generated.
+-}
+mapDistribution2 : Options -> Distribution -> FileMap
+mapDistribution2 opts distro =
+    let
+        fixedDistro =
+            fixDistribution distro
+    in
+    case fixedDistro of
+        Distribution.Library packageName _ packageDef ->
+            let
+                ir : IR
+                ir =
+                    IR.fromDistribution fixedDistro
+
+                entryValues : List (Result Error ( FQName, Value.Definition () (Type ()) ))
+                entryValues =
+                    opts.entryPoints
+                        |> List.map
+                            (\fqn ->
+                                IR.lookupValueDefinition fqn ir
+                                    |> Maybe.map (Tuple.pair fqn)
+                                    |> Result.fromMaybe (EntryPointNotFound fqn)
+                            )
+            in
+            entryValues
+                |> List.map
+                    (Result.map
+                        (\( ( valPackageName, valModuleName, valName ), valueDef ) ->
+                            let
+                                packagePath : List String
+                                packagePath =
+                                    packageName
+                                        ++ valModuleName
+                                        |> List.map (Name.toCamelCase >> String.toLower)
+
+                                object : Scala.TypeDecl
+                                object =
+                                    Scala.Object
+                                        { modifiers = []
+                                        , name = "SparkJobs"
+                                        , extends = []
+                                        , members =
+                                            List.singleton <|
+                                                case mapFunctionDefinition ir ( valPackageName, valModuleName, valName ) of
+                                                    Ok memberDecl ->
+                                                        Just (Scala.withoutAnnotation memberDecl)
+
+                                                    Err err ->
+                                                        let
+                                                            _ =
+                                                                Debug.log "mapFunctionDefinition error" err
+                                                        in
+                                                        Nothing
+                                        , body = Nothing
+                                        }
+
+                                compilationUnit : Scala.CompilationUnit
+                                compilationUnit =
+                                    { dirPath = packagePath
+                                    , fileName = "SparkJobs.scala"
+                                    , packageDecl = packagePath
+                                    , imports = []
+                                    , typeDecls = [ Scala.Documented Nothing (Scala.withoutAnnotation object) ]
+                                    }
+                            in
+                            ( ( packagePath, "SparkJobs.scala" )
+                            , PrettyPrinter.mapCompilationUnit (PrettyPrinter.Options 2 80) compilationUnit
+                            )
+                        )
+                    )
+                |> Dict.fromList
+
+
 {-| Fix up the modules in the Distribution prior to generating Spark code
 -}
 fixDistribution : Distribution -> Distribution
@@ -135,6 +211,53 @@ fixDistribution distribution =
     case distribution of
         Distribution.Library libraryPackageName dependencies packageDef ->
             let
+                mapEnumToLiteral : Value ta va -> Value ta va
+                mapEnumToLiteral value =
+                    value
+                        |> Value.rewriteValue
+                            (\currentValue ->
+                                case currentValue of
+                                    Value.Constructor va fqn ->
+                                        let
+                                            literal =
+                                                fqn
+                                                    |> FQName.getLocalName
+                                                    |> Name.toTitleCase
+                                                    |> StringLiteral
+                                                    |> Value.Literal va
+                                        in
+                                        Just literal
+
+                                    _ ->
+                                        Nothing
+                            )
+
+                fixModuleDef : Module.Definition ta va -> Module.Definition ta va
+                fixModuleDef moduleDef =
+                    let
+                        updatedValues =
+                            moduleDef.values
+                                |> Dict.toList
+                                |> List.map
+                                    (\( valueName, accessControlledValueDef ) ->
+                                        let
+                                            updatedAccessControlledValueDef =
+                                                accessControlledValueDef
+                                                    |> AccessControlled.map
+                                                        (\documentedValueDef ->
+                                                            documentedValueDef
+                                                                |> Documented.map
+                                                                    (\valueDef ->
+                                                                        { valueDef | body = mapEnumToLiteral valueDef.body }
+                                                                    )
+                                                        )
+                                        in
+                                        ( valueName, updatedAccessControlledValueDef )
+                                    )
+                                |> Dict.fromList
+                    in
+                    { moduleDef | values = updatedValues }
+
                 updatedModules =
                     packageDef.modules
                         |> Dict.toList
@@ -150,59 +273,6 @@ fixDistribution distribution =
                         |> Dict.fromList
             in
             Distribution.Library libraryPackageName dependencies { packageDef | modules = updatedModules }
-
-
-{-| Fix up the values in a Module Definition prior to generating Spark code
--}
-fixModuleDef : Module.Definition ta va -> Module.Definition ta va
-fixModuleDef moduleDef =
-    let
-        updatedValues =
-            moduleDef.values
-                |> Dict.toList
-                |> List.map
-                    (\( valueName, accessControlledValueDef ) ->
-                        let
-                            updatedAccessControlledValueDef =
-                                accessControlledValueDef
-                                    |> AccessControlled.map
-                                        (\documentedValueDef ->
-                                            documentedValueDef
-                                                |> Documented.map
-                                                    (\valueDef ->
-                                                        { valueDef | body = mapEnumToLiteral valueDef.body }
-                                                    )
-                                        )
-                        in
-                        ( valueName, updatedAccessControlledValueDef )
-                    )
-                |> Dict.fromList
-    in
-    { moduleDef | values = updatedValues }
-
-
-{-| Replace no argument union constructors which correspond to enums, with string literals.
--}
-mapEnumToLiteral : Value ta va -> Value ta va
-mapEnumToLiteral value =
-    value
-        |> Value.rewriteValue
-            (\currentValue ->
-                case currentValue of
-                    Value.Constructor va fqn ->
-                        let
-                            literal =
-                                fqn
-                                    |> FQName.getLocalName
-                                    |> Name.toTitleCase
-                                    |> StringLiteral
-                                    |> Value.Literal va
-                        in
-                        Just literal
-
-                    _ ->
-                        Nothing
-            )
 
 
 {-| Maps function definitions defined within the current package to scala
