@@ -44,3 +44,13 @@ object scalaGenerated extends Module {
         def scalaVersion = "2.11.12"
     }
 }
+
+
+object codecs extends ScalaModule{
+  def scalaVersion = "2.12.12"
+
+  def ivyDeps = Agg(
+    ivy"io.circe::circe-core:0.14.1",
+    ivy"org.scala-lang.modules::scala-collection-compat:2.3.1"
+  )
+}
