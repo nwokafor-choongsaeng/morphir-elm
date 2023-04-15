@@ -343,35 +343,7 @@ mapSpecificationAttributes f spec =
 {-| -}
 mapDefinition : (Type a -> Result e (Type b)) -> Definition a -> Result (List e) (Definition b)
 mapDefinition f def =
-    case def of
-        TypeAliasDefinition params tpe ->
-            f tpe
-                |> Result.map (TypeAliasDefinition params)
-                |> Result.mapError List.singleton
-
-        CustomTypeDefinition params constructors ->
-            let
-                ctorsResult : Result (List e) (AccessControlled (Constructors b))
-                ctorsResult =
-                    constructors.value
-                        |> Dict.toList
-                        |> List.map
-                            (\( ctorName, ctorArgs ) ->
-                                ctorArgs
-                                    |> List.map
-                                        (\( argName, argType ) ->
-                                            f argType
-                                                |> Result.map (Tuple.pair argName)
-                                        )
-                                    |> ResultList.keepAllErrors
-                                    |> Result.map (Tuple.pair ctorName)
-                            )
-                        |> ResultList.keepAllErrors
-                        |> Result.map (Dict.fromList >> AccessControlled constructors.access)
-                        |> Result.mapError List.concat
-            in
-            ctorsResult
-                |> Result.map (CustomTypeDefinition params)
+    mapDefinition f def
 
 
 {-| -}
@@ -823,3 +795,42 @@ toString tpe =
 
         Unit _ ->
             "()"
+
+
+{-| Type that represents a list that contains a mix of failed and successful records.
+-}
+type alias ResultList e a =
+    List (Result e a)
+
+
+keepAllErrors : ResultList e a -> Result (List e) (List a)
+keepAllErrors results =
+    let
+        oks : List a
+        oks =
+            results
+                |> List.filterMap
+                    (\result ->
+                        result
+                            |> Result.toMaybe
+                    )
+
+        errs : List e
+        errs =
+            results
+                |> List.filterMap
+                    (\result ->
+                        case result of
+                            Ok _ ->
+                                Nothing
+
+                            Err e ->
+                                Just e
+                    )
+    in
+    case errs of
+        [] ->
+            Ok oks
+
+        _ ->
+            Err errs

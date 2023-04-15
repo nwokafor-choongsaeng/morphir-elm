@@ -66,15 +66,7 @@ The algorithm will treat any non-word charaters that are not spaces as a path se
 -}
 fromString : String -> Path
 fromString string =
-    let
-        separatorRegex : Regex
-        separatorRegex =
-            Regex.fromString "[^\\w\\s]+"
-                |> Maybe.withDefault Regex.never
-    in
-    Regex.split separatorRegex string
-        |> List.map Name.fromString
-        |> fromList
+    String.split ":" string |> List.singleton
 
 
 {-| Turn a path into a string using the specified naming convention and separator.

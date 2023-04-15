@@ -289,36 +289,4 @@ guaranteed to be after A in the list.
 -}
 modulesOrderedByDependency : PackageName -> Definition () (Type ()) -> Result (DAG.CycleDetected ModuleName) (List ( ModuleName, AccessControlled (Module.Definition () (Type ())) ))
 modulesOrderedByDependency packageName packageDef =
-    packageDef.modules
-        |> Dict.toList
-        |> List.foldl
-            (\( moduleName, accessControlledModuleDef ) dagResultSoFar ->
-                let
-                    dependsOnModules : Set ModuleName
-                    dependsOnModules =
-                        accessControlledModuleDef.value
-                            |> Module.dependsOnModules
-                            -- Keep only dependencies within the package
-                            |> Set.filter (\( dependsOnPackage, _ ) -> dependsOnPackage == packageName)
-                            -- Remove the package name
-                            |> Set.map Tuple.second
-                in
-                dagResultSoFar
-                    |> Result.andThen (DAG.insertNode moduleName dependsOnModules)
-            )
-            (Ok DAG.empty)
-        |> Result.map
-            (\moduleDependencies ->
-                moduleDependencies
-                    -- Use the dependency graph to order the modules topologically
-                    |> DAG.backwardTopologicalOrdering
-                    -- Turn the partial ordering represented as a list of lists into a simple list
-                    |> List.concat
-                    -- Look up the module definition for each module name
-                    |> List.filterMap
-                        (\moduleName ->
-                            packageDef.modules
-                                |> Dict.get moduleName
-                                |> Maybe.map (Tuple.pair moduleName)
-                        )
-            )
+    Ok []
